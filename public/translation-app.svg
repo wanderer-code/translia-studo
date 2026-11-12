@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Flat Rounded Squircle Mask -->
+    <clipPath id="flatSquircle">
+      <rect x="32" y="32" width="448" height="448" rx="108" ry="108" />
+    </clipPath>
+  </defs>
+
+  <!-- Main Squircle Clipped Group -->
+  <g clip-path="url(#flatSquircle)">
+    <!-- Right Base Background: Flat Sage Mint (#5bb381) -->
+    <rect x="32" y="32" width="448" height="448" fill="#5bb381" />
+
+    <!-- Left Interlocking Wavy S-Curve Background: Flat Steel Blue (#5282b8) -->
+    <path fill="#5282b8" d="M 32 32
+         H 256
+         V 118
+         C 256 145, 284 166, 284 202
+         C 284 232, 232 276, 232 314
+         C 232 352, 256 376, 256 408
+         V 480
+         H 32
+         Z" />
+
+    <!-- Connected Rounded 'E' + Persian 'ف' Ligature (#1b222c) -->
+    <!-- Top bar of E curves smoothly down into the right-hand trough & loop of ف -->
+    <path fill="#1b222c" fill-rule="evenodd" d="M 118 192
+         Q 118 164 146 164
+         H 226
+         C 264 164, 282 184, 282 222
+         C 282 238, 272 252, 263 265
+         C 261 293, 280 304, 314 304
+         C 350 304, 382 300, 392 287
+         C 394 284, 394 277, 391 278
+         C 381 283, 367 286, 356 286
+         C 340 286, 336 274, 338 254
+         C 340 227, 355 204, 375 204
+         C 398 204, 413 236, 413 276
+         C 413 317, 384 334, 312 334
+         C 264 334, 242 318, 242 280
+         L 253 224
+         C 254 202, 243 192, 222 192
+         H 158
+         Q 146 192 146 204
+         V 222
+         Q 146 234 158 234
+         H 199
+         Q 211 234 211 246
+         V 252
+         Q 211 264 199 264
+         H 158
+         Q 146 264 146 276
+         V 290
+         Q 146 302 158 302
+         H 226
+         L 208 330
+         H 146
+         Q 118 330 118 302
+         Z
+         M 375 234
+         C 366 234, 360 245, 360 256
+         C 360 264, 366 266, 376 266
+         C 385 266, 390 263, 389 254
+         C 388 242, 383 234, 375 234
+         Z" />
+
+    <!-- Rounded Diamond Nuqta (Dot of 'ف') -->
+    <rect x="355" y="157" width="34" height="34" rx="6" ry="6" transform="rotate(45 372 174)" fill="#1b222c" />
+
+    <!-- Diagonal Bezier Handle Stem -->
+    <line x1="191" y1="352" x2="323" y2="152" stroke="#1b222c" stroke-width="10" stroke-linecap="round" />
+
+    <!-- Top-Right Circular Endpoint Node -->
+    <circle cx="331" cy="140" r="11" fill="#5bb381" stroke="#1b222c" stroke-width="8.5" />
+
+    <!-- Bottom-Left Circular Endpoint Node -->
+    <circle cx="183" cy="364" r="11" fill="#5282b8" stroke="#1b222c" stroke-width="8.5" />
+
+    <!-- Center Rotated Rounded-Square Keyframe Node -->
+    <rect x="239" y="236" width="34" height="34" rx="7" ry="7" transform="rotate(45 256 253)" fill="#5bb381" stroke="#1b222c" stroke-width="8.5" />
+  </g>
+</svg>

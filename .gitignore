@@ -1,0 +1,8 @@
+node_modules/
+dist/
+tmp/
+tmp/
+.DS_Store
+
+# User-supplied dictionary data
+public/dictionary/
