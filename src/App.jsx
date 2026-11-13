@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, useId } from 'react';
+import { createPortal } from 'react-dom';
 import { create } from 'zustand';
 import { motion, AnimatePresence } from 'framer-motion';
 import { loadExternalScript } from './external-libraries.js';
@@ -8,6 +9,7 @@ export { LESSON_2_SEGMENTS, LESSON_3_SEGMENTS, extractCleanParagraphsFromPDF, ex
 import { computeWordDiff, runSegmentQA } from './review-quality.js';
 export { toPersianDigits, computeWordDiff, runSegmentQA } from './review-quality.js';
 import DictionaryPanel from './DictionaryPanel.jsx';
+import SuggestionsPanel from './SuggestionsPanel.jsx';
 import TranslatorLauncher from './TranslatorLauncher.jsx';
 import { captureTextSelection, updateMarksForEdit, useTextMarks } from './text-highlights.js';
 import { splitSentences, matchSentence } from './sentences.js';
@@ -23,6 +25,7 @@ import {
   Redo2,
   BookOpen,
   BookText,
+  Lightbulb,
   Plus,
   Trash2,
   X,
@@ -47,6 +50,7 @@ import {
   GripVertical,
   Zap,
   Gauge,
+  Filter,
 } from 'lucide-react';
 
 // ============================================================================
@@ -244,6 +248,7 @@ const useTranslationStore = create((set, get) => ({
   glossary: saved?.glossary || INITIAL_GLOSSARY,
   comments: saved?.comments || INITIAL_COMMENTS,
   projects: saved?.projects || {},
+  deletedProjectIds: saved?.deletedProjectIds || [],
   saveError: null,
   sentenceHighlightEnabled: saved?.sentenceHighlightEnabled ?? false,
   selectedSentence: null,
@@ -328,6 +333,7 @@ const useTranslationStore = create((set, get) => ({
           showGlossaryPanel,
           enColumnRatio,
           projects,
+          deletedProjectIds: state.deletedProjectIds,
           dismissedWarnings: state.dismissedWarnings,
           sentenceHighlightEnabled: state.sentenceHighlightEnabled,
           projectName: state.projectName,
@@ -361,6 +367,26 @@ const useTranslationStore = create((set, get) => ({
     const segment = { id: `seg-${Date.now()}`, enId: `en-${Date.now()}`, faId: `fa-${Date.now()}`, index: 1, sourcePage: null, english: '', rawPersian: '', editedPersian: '', status: 'unreviewed', lastModified: 'Just now' };
     set({ activePresetLesson: id, projectName: name, sourceFileName: 'Choose English file', targetFileName: 'Choose Persian file', segments: [segment], glossary: [], comments: [], dismissedWarnings: {}, activeSegmentId: segment.id, selectedSentence: null, pastHistory: [], futureHistory: [] });
     get().persist();
+  },
+
+  deleteCurrentProject: () => {
+    const state = get();
+    const deletedId = state.activePresetLesson;
+    const projects = { ...state.projects };
+    delete projects[deletedId];
+    const deletedProjectIds = [...new Set([...state.deletedProjectIds, deletedId])];
+    const nextId = [...Object.keys(projects), 'lesson2', 'lesson3'].find((id) => !deletedProjectIds.includes(id));
+    if (nextId) {
+      const isLesson3 = nextId === 'lesson3';
+      const project = projects[nextId] || { sourceFileName: isLesson3 ? '03.pdf' : '02-1.pdf', targetFileName: isLesson3 ? 'Game_Theory_Lesson_3_Persian.docx' : 'Game_Theory_Lesson_2_Persian.docx', segments: isLesson3 ? LESSON_3_SEGMENTS : LESSON_2_SEGMENTS, glossary: INITIAL_GLOSSARY, comments: isLesson3 ? [] : INITIAL_COMMENTS, dismissedWarnings: {}, projectName: isLesson3 ? 'Lesson 3' : 'Lesson 2' };
+      set({ projects, deletedProjectIds, ...project, activePresetLesson: nextId, activeSegmentId: project.segments[0]?.id, pastHistory: [], futureHistory: [], selectedSentence: null, searchQuery: '', reviewFilter: 'all' });
+    } else {
+      const id = `project-${Date.now()}`;
+      const segment = { id: `seg-${Date.now()}`, enId: `en-${Date.now()}`, faId: `fa-${Date.now()}`, index: 1, sourcePage: null, english: '', rawPersian: '', editedPersian: '', status: 'unreviewed', lastModified: 'Just now' };
+      set({ projects, deletedProjectIds, activePresetLesson: id, projectName: 'Untitled project', sourceFileName: 'Choose English file', targetFileName: 'Choose Persian file', segments: [segment], glossary: [], comments: [], dismissedWarnings: {}, activeSegmentId: segment.id, pastHistory: [], futureHistory: [], selectedSentence: null, searchQuery: '', reviewFilter: 'all' });
+    }
+    get().persist();
+    get().setToast('Project removed');
   },
 
   toggleSentenceHighlight: () => {
@@ -1264,7 +1290,63 @@ function UIInspectorModal() {
 // 6. LEFT SLIM ACTIVITY RAIL & DECLUTTERED TOP HEADERS
 // ============================================================================
 
-function LeftActivityRail({ showDictionary, onToggleDictionary }) {
+const REVIEW_STATUS_OPTIONS = [
+  { value: 'unreviewed', label: 'Unreviewed' }, { value: 'edited', label: 'In progress' },
+  { value: 'needs_check', label: 'Needs attention' }, { value: 'approved', label: 'Approved' },
+];
+const SEGMENT_FILTER_OPTIONS = [
+  { value: 'all', label: 'All segments' }, { value: 'unmatched', label: 'Unmatched blocks' },
+  ...REVIEW_STATUS_OPTIONS, { value: 'warnings', label: 'QA warnings' },
+];
+
+function GlassSelect({ id, label, value, options, onChange, disabled, className = '', status }) {
+  const listId = useId();
+  const triggerRef = useRef(null);
+  const listRef = useRef(null);
+  const [position, setPosition] = useState(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
+  const open = () => {
+    if (disabled) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const desiredHeight = Math.min(options.length * 38 + 12, 280);
+    const availableBelow = window.innerHeight - rect.bottom - 8;
+    const above = availableBelow < Math.min(desiredHeight, 160) && rect.top > availableBelow;
+    const height = Math.max(60, Math.min(desiredHeight, above ? rect.top - 8 : availableBelow));
+    setActiveIndex(selectedIndex);
+    setPosition({ left: Math.max(8, Math.min(rect.left, window.innerWidth - Math.max(rect.width, 180) - 8)), top: above ? rect.top - height - 5 : rect.bottom + 5, width: Math.max(rect.width, 180), maxHeight: height });
+  };
+  const close = () => setPosition(null);
+  useEffect(() => {
+    if (!position) return;
+    const outside = (event) => { if (!triggerRef.current?.contains(event.target) && !listRef.current?.contains(event.target)) close(); };
+    const onScroll = (event) => { if (!listRef.current?.contains(event.target)) close(); };
+    document.addEventListener('pointerdown', outside);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', close);
+    return () => { document.removeEventListener('pointerdown', outside); window.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', close); };
+  }, [position]);
+  useEffect(() => { if (position) document.getElementById(`${listId}-option-${activeIndex}`)?.scrollIntoView({ block: 'nearest' }); }, [activeIndex, position, listId]);
+  const choose = (index) => { const option = options[index]; if (option && !option.disabled) { onChange(option.value); close(); triggerRef.current?.focus(); } };
+  const onKeyDown = (event) => {
+    if (event.key === 'Escape' && position) { event.preventDefault(); event.stopPropagation(); close(); return; }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault(); event.stopPropagation();
+      if (!position) { open(); return; }
+      setActiveIndex((index) => event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : Math.max(0, Math.min(options.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))));
+    } else if (position && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); choose(activeIndex); }
+  };
+  return <>
+    <button ref={triggerRef} id={id} type="button" role="combobox" aria-label={label} aria-expanded={!!position} aria-controls={listId} aria-haspopup="listbox" aria-activedescendant={position ? `${listId}-option-${activeIndex}` : undefined} disabled={disabled} data-review-status={status} className={`glass-select-trigger ${className}`} onClick={(event) => { event.stopPropagation(); position ? close() : open(); }} onKeyDown={onKeyDown}>
+      <span className="glass-select-value">{options[selectedIndex]?.label}</span><ChevronDown className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+    </button>
+    {position && createPortal(<div ref={listRef} id={listId} role="listbox" aria-label={label} className="glass-select-menu" style={position} onMouseDown={(event) => event.preventDefault()}>
+      {options.map((option, index) => <div key={option.value} id={`${listId}-option-${index}`} role="option" aria-selected={option.value === value} aria-disabled={option.disabled || undefined} className={`glass-select-option ${activeIndex === index ? 'is-active' : ''}`} onMouseMove={() => setActiveIndex(index)} onClick={() => choose(index)}>{option.label}{option.value === value && <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />}</div>)}
+    </div>, document.body)}
+  </>;
+}
+
+function LeftActivityRail({ showDictionary, onToggleDictionary, showSuggestions, onToggleSuggestions, filteredCount, onOpenProjects }) {
   const {
     resetSampleData,
     toggleSearchBar,
@@ -1273,10 +1355,11 @@ function LeftActivityRail({ showDictionary, onToggleDictionary }) {
     showGlossaryPanel,
     toggleGlossaryPanel,
     toggleUIInspectorModal,
+    reviewFilter, setReviewFilter, segments,
   } = useTranslationStore();
 
   return (
-    <aside className="w-11 bg-[#161a22] border-r border-[#2c3340] flex flex-col items-center py-3 justify-between select-none shrink-0 z-20">
+    <aside className="activity-rail w-11 bg-[#161a22] border-r border-[#2c3340] flex flex-col items-center py-3 justify-between select-none shrink-0 z-20">
       <div className="flex flex-col items-center gap-3.5">
         <img
           src={`${import.meta.env.BASE_URL}translation-app.svg`}
@@ -1284,9 +1367,13 @@ function LeftActivityRail({ showDictionary, onToggleDictionary }) {
           className="w-8 h-8"
         />
 
+        <button type="button" onClick={onOpenProjects} title="Project management" aria-label="Project management" className="p-1.5 rounded-md text-[#8b95a5] hover:text-[#d5dce6] hover:bg-[#222832] transition-colors">
+          <FolderOpen className="w-4 h-4" />
+        </button>
+
         <button
           onClick={toggleSearchBar}
-          title="Search & Filter Segments"
+          title="Search English and Persian" aria-label="Search English and Persian"
           className="p-1.5 rounded-md text-[#8b95a5] hover:text-[#d5dce6] hover:bg-[#222832] transition-colors"
         >
           <Search className="w-4 h-4" />
@@ -1322,27 +1409,61 @@ function LeftActivityRail({ showDictionary, onToggleDictionary }) {
           <BookText className="w-4 h-4" />
         </button>
 
+        <button type="button" onClick={onToggleSuggestions} title={showSuggestions ? 'Hide translation suggestions' : 'Show translation suggestions'}
+          aria-label={showSuggestions ? 'Hide translation suggestions' : 'Show translation suggestions'} aria-pressed={showSuggestions}
+          className={`p-1.5 rounded-md transition-colors ${showSuggestions ? 'text-[#7cb7f0] bg-[#26303d] border border-[#4b83b8]/40' : 'text-[#8b95a5] hover:text-[#d5dce6] hover:bg-[#222832]'}`}>
+          <Lightbulb className="w-4 h-4" />
+        </button>
+
       </div>
 
-      <div />
+      <div className="flex flex-col items-center gap-3.5 text-[#8b95a5]">
+        <details className="relative">
+          <summary className={`p-1.5 rounded-md cursor-pointer list-none ${reviewFilter !== 'all' ? 'text-[#7cb7f0] bg-[#26303d]' : 'hover:bg-[#222832]'}`} title="Filter segments" aria-label="Filter segments"><Filter className="w-4 h-4" /></summary>
+          <div className="absolute bottom-0 left-full ml-2 w-48 p-3 rounded-lg bg-[#161a22] border border-[#323a48] shadow-xl text-xs">
+            <label className="block text-[#d5dce6] mb-2" htmlFor="segment-filter">Filter segments</label>
+            <GlassSelect id="segment-filter" label="Filter segments" value={reviewFilter} onChange={setReviewFilter} options={SEGMENT_FILTER_OPTIONS} className="w-full" />
+            <p className="mt-2 text-[#8b95a5]">{filteredCount} / {segments.length} segments</p>
+          </div>
+        </details>
+        <VisualizerSubToolbar />
+      </div>
     </aside>
   );
+}
+
+async function parseProjectFile(file) {
+  const { autoSplitLists, setToast } = useTranslationStore.getState();
+  setToast(`Parsing ${file.name}...`);
+  const lowerName = file.name.toLowerCase();
+  let paragraphs;
+  if (lowerName.endsWith('.pdf')) paragraphs = await extractCleanParagraphsFromPDF(file, autoSplitLists);
+  else if (lowerName.endsWith('.docx')) paragraphs = await extractCleanParagraphsFromDocx(file, autoSplitLists);
+  else paragraphs = (await file.text()).split(/\r?\n\s*\r?\n|\r?\n/).map((paragraph) => paragraph.trim()).filter((paragraph) => paragraph.length > 0 && !isBinaryGarbageLine(paragraph));
+  if (lowerName.endsWith('.docx')) {
+    const candidates = findRepeatedPageNumberCandidates(paragraphs);
+    if (candidates.length && window.confirm(`${file.name}: found ${candidates.length} standalone numbers in repeated sequential pairs (${candidates[0].value}, ${candidates[0].value}, ... ${candidates.at(-1).value}, ${candidates.at(-1).value}). They may be page numbers, but could be document content.\n\nExclude these paragraphs from this import? Choose Cancel to keep them.`)) {
+      const removed = new Set(candidates.map((candidate) => candidate.index));
+      paragraphs = paragraphs.filter((_, index) => !removed.has(index));
+    }
+  }
+  if (!paragraphs.length) throw new Error(`No readable paragraphs found in ${file.name}.`);
+  return paragraphs;
 }
 
 function TopDocumentHeaderBar() {
   const {
     activePresetLesson,
     loadPresetLesson,
-    sourceFileName,
     targetFileName,
     segments,
     uploadFileContent,
-    autoSplitLists,
     setToast,
-    projects,
-    createProject,
   } = useTranslationStore();
 
+  const projectNames = useTranslationStore((state) => state.projects);
+  const currentProjectName = useTranslationStore((state) => state.projectName);
+  const deletedProjectIds = useTranslationStore((state) => state.deletedProjectIds);
   const sourceInputRef = useRef(null);
   const targetInputRef = useRef(null);
 
@@ -1355,42 +1476,14 @@ function TopDocumentHeaderBar() {
   const handleFileUpload = async (type, e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const lowerName = file.name.toLowerCase();
-    setToast(`Parsing ${file.name}...`);
-
     try {
-      let paragraphs = [];
-      if (lowerName.endsWith('.pdf')) {
-        paragraphs = await extractCleanParagraphsFromPDF(file, autoSplitLists);
-      } else if (lowerName.endsWith('.docx')) {
-        paragraphs = await extractCleanParagraphsFromDocx(file, autoSplitLists);
-      } else {
-        const text = await file.text();
-        paragraphs = text
-          .split(/\r?\n\s*\r?\n|\r?\n/)
-          .map((p) => p.trim())
-          .filter((p) => p.length > 0 && !isBinaryGarbageLine(p));
+      const paragraphs = await parseProjectFile(file);
+      const otherCount = useTranslationStore.getState().segments.filter((segment) => (type === 'source' ? segment.editedPersian : segment.english).trim()).length;
+      const preview = paragraphs.slice(0, 2).map((paragraph) => paragraph.slice(0, 100)).join('\n\n');
+      if (window.confirm(`${file.name}: ${paragraphs.length} extracted blocks; the other column has ${otherCount}. Blocks are paired by position; differing boundaries may shift subsequent rows. Count difference: ${Math.abs(paragraphs.length - otherCount)}.\n\nPreview:\n${preview}\n\nReplace the ${type === 'source' ? 'English' : 'Persian'} column?`)) {
+        uploadFileContent(type, file.name, paragraphs);
       }
-
-      if (paragraphs.length > 0) {
-        if (lowerName.endsWith('.docx')) {
-          const candidates = findRepeatedPageNumberCandidates(paragraphs);
-          if (candidates.length && window.confirm(`${file.name}: found ${candidates.length} standalone numbers in repeated sequential pairs (${candidates[0].value}, ${candidates[0].value}, ? ${candidates.at(-1).value}, ${candidates.at(-1).value}). They may be page numbers, but could be document content.\n\nExclude these paragraphs from this import? Choose Cancel to keep them.`)) {
-            const removed = new Set(candidates.map((candidate) => candidate.index));
-            paragraphs = paragraphs.filter((_, index) => !removed.has(index));
-          }
-        }
-        const otherCount = segments.filter((s) => (type === 'source' ? s.editedPersian : s.english).trim()).length;
-        const preview = paragraphs.slice(0, 2).map((p) => p.slice(0, 100)).join('\n\n');
-        if (window.confirm(`${file.name}: ${paragraphs.length} extracted blocks; the other column has ${otherCount}. Blocks are paired by position; differing boundaries may shift subsequent rows. Count difference: ${Math.abs(paragraphs.length - otherCount)}.\n\nPreview:\n${preview}\n\nReplace the ${type === 'source' ? 'English' : 'Persian'} column?`)) {
-          uploadFileContent(type, file.name, paragraphs);
-        }
-      } else {
-        setToast(`No readable paragraphs found in ${file.name}.`);
-      }
-    } catch (err) {
-      setToast(`Failed to parse ${file.name}.`);
-    }
+    } catch (error) { setToast(error.message || `Failed to parse ${file.name}.`); }
     e.target.value = '';
   };
 
@@ -1414,7 +1507,7 @@ function TopDocumentHeaderBar() {
     const store = useTranslationStore.getState();
     store.persist();
     const current = useTranslationStore.getState();
-    download(new Blob([JSON.stringify({ version: 1, activePresetLesson: current.activePresetLesson, projects: current.projects }, null, 2)], { type: 'application/json' }), 'translia-project-backup.json');
+    download(new Blob([JSON.stringify({ version: 1, activePresetLesson: current.activePresetLesson, projects: current.projects, deletedProjectIds: current.deletedProjectIds }, null, 2)], { type: 'application/json' }), 'translia-project-backup.json');
     setToast('Project backup downloaded');
   };
   const handleRestore = async (event) => {
@@ -1426,7 +1519,7 @@ function TopDocumentHeaderBar() {
       if (window.confirm('Restore this backup and replace the saved projects in this browser?')) {
         const key = backup.activePresetLesson in backup.projects ? backup.activePresetLesson : Object.keys(backup.projects)[0];
         if (!key) throw new Error('Empty backup');
-        useTranslationStore.setState({ projects: backup.projects, ...backup.projects[key], projectName: backup.projects[key].projectName || key, dismissedWarnings: backup.projects[key].dismissedWarnings || {}, activePresetLesson: key, activeSegmentId: backup.projects[key].segments[0]?.id, pastHistory: [], futureHistory: [], selectedSentence: null });
+        useTranslationStore.setState({ projects: backup.projects, deletedProjectIds: Array.isArray(backup.deletedProjectIds) ? backup.deletedProjectIds.filter((id) => typeof id === 'string' && !(id in backup.projects)) : [], ...backup.projects[key], projectName: backup.projects[key].projectName || key, dismissedWarnings: backup.projects[key].dismissedWarnings || {}, activePresetLesson: key, activeSegmentId: backup.projects[key].segments[0]?.id, pastHistory: [], futureHistory: [], selectedSentence: null });
         useTranslationStore.getState().persist();
         setToast('Backup restored');
       }
@@ -1438,103 +1531,52 @@ function TopDocumentHeaderBar() {
     <header className="app-header h-10 bg-[#161a22] border-b border-[#2c3340] px-3 flex items-center justify-between select-none shrink-0 overflow-hidden">
       <div className="flex items-center gap-2 min-w-0">
         <div className="flex items-center bg-[#222832] p-0.5 rounded-md border border-[#323a48] mr-1 shrink-0">
-          <button
+          {!deletedProjectIds.includes('lesson2') && <button
             onClick={() => loadPresetLesson('lesson2')}
-            className={`px-2 py-0.5 rounded text-[10.5px] font-medium transition-colors ${
+            className={`px-2 py-0.5 rounded text-[10.5px] font-medium transition-colors max-w-[140px] truncate ${
               activePresetLesson === 'lesson2'
                 ? 'bg-[#2c3646] text-[#97c4f0] border border-[#4b83b8]/40'
                 : 'text-[#8b95a5] hover:text-[#d5dce6]'
             }`}
             title="Load Lesson 2 (02-1.pdf + Persian .docx)"
           >
-            Lesson 2
-          </button>
-          <button
+            {activePresetLesson === 'lesson2' ? currentProjectName : projectNames.lesson2?.projectName || 'Lesson 2'}
+          </button>}
+          {!deletedProjectIds.includes('lesson3') && <button
             onClick={() => loadPresetLesson('lesson3')}
-            className={`px-2 py-0.5 rounded text-[10.5px] font-medium transition-colors ${
+            className={`px-2 py-0.5 rounded text-[10.5px] font-medium transition-colors max-w-[140px] truncate ${
               activePresetLesson === 'lesson3'
                 ? 'bg-[#2c3646] text-[#97c4f0] border border-[#4b83b8]/40'
                 : 'text-[#8b95a5] hover:text-[#d5dce6]'
             }`}
             title="Load Lesson 3 (03.pdf + Persian .docx)"
           >
-            Lesson 3
-          </button>
+            {activePresetLesson === 'lesson3' ? currentProjectName : projectNames.lesson3?.projectName || 'Lesson 3'}
+          </button>}
         </div>
 
-        <button type="button" className="review-control whitespace-nowrap text-[11px]" onClick={() => {
-          const name = window.prompt('Name your new project:');
-          if (name?.trim()) createProject(name.trim());
-        }}>+ Project</button>
-        {Object.keys(projects).some((key) => key.startsWith('project-')) && <select aria-label="Open a project" className="review-control text-[11px] max-w-[130px]" value={activePresetLesson.startsWith('project-') ? activePresetLesson : ''} onChange={(e) => { if (e.target.value) loadPresetLesson(e.target.value); }}>
-          <option value="">Projects</option>
-          {Object.entries(projects).filter(([key]) => key.startsWith('project-')).map(([key, project]) => <option key={key} value={key}>{project.projectName || 'Untitled project'}</option>)}
-        </select>}
-
-        <input
-          ref={sourceInputRef}
-          type="file"
-          accept=".pdf,.txt,.md"
-          className="hidden"
-          onChange={(e) => handleFileUpload('source', e)}
-        />
-        <button
-          onClick={() => sourceInputRef.current?.click()}
-          className="flex items-center gap-2 px-2.5 py-1 rounded-md bg-[#222832] hover:bg-[#28303d] border border-[#323a48] text-xs text-[#d5dce6] transition-colors truncate max-w-[180px]"
-          title="Click to upload English PDF file"
-        >
-          <span className="w-4 h-4 rounded bg-[#8c3b3b]/30 border border-[#b85656]/50 text-[#e08282] flex items-center justify-center text-[9px] font-bold shrink-0">
-            PDF
-          </span>
-          <span className="font-medium truncate">{sourceFileName}</span>
-          <Upload className="w-3 h-3 text-[#8b95a5] ml-0.5 shrink-0" />
-        </button>
-
-        <input
-          ref={targetInputRef}
-          type="file"
-          accept=".docx,.txt,.md"
-          className="hidden"
-          onChange={(e) => handleFileUpload('target', e)}
-        />
-        <button
-          onClick={() => targetInputRef.current?.click()}
-          className="flex items-center gap-2 px-2.5 py-1 rounded-md bg-[#222832] hover:bg-[#28303d] border border-[#323a48] text-xs text-[#d5dce6] transition-colors truncate max-w-[210px]"
-          title="Click to upload Persian Word (.docx) translation"
-        >
-          <span className="w-4 h-4 rounded bg-[#3b6998]/30 border border-[#588ec4]/50 text-[#8abaf0] flex items-center justify-center text-[9px] font-bold shrink-0">
-            W
-          </span>
-          <span className="font-medium truncate">{targetFileName}</span>
-          <Upload className="w-3 h-3 text-[#8b95a5] ml-0.5 shrink-0" />
-        </button>
+        {!['lesson2', 'lesson3'].includes(activePresetLesson) && <span className="current-project-name" title={currentProjectName}>{currentProjectName}</span>}
+        <input id="source-file-input" ref={sourceInputRef} type="file" accept=".pdf,.txt,.md" className="hidden" onChange={(e) => handleFileUpload('source', e)} />
+        <input id="target-file-input" ref={targetInputRef} type="file" accept=".docx,.txt,.md" className="hidden" onChange={(e) => handleFileUpload('target', e)} />
       </div>
 
-      <div className="hidden md:flex items-center gap-3 flex-1 max-w-xs mx-4">
-        <div className="flex-1 h-1.5 bg-[#222832] rounded-full overflow-hidden border border-[#2c3340]">
-          <div
-            className="h-full bg-gradient-to-r from-[#4b83b8] via-[#5299a8] to-[#58c496] rounded-full transition-all duration-500"
-            style={{ width: `${progressStats.pct}%` }}
-          />
-        </div>
-        <span className="text-[11px] text-[#8b95a5] font-medium whitespace-nowrap">
-          <strong className="text-[#d5dce6]">{progressStats.pct}%</strong> Approved
-        </span>
-      </div>
+      <HistoryControls />
+      <div className="flex-1" />
+      <HeaderStatus progress={progressStats.pct} />
 
       <div className="flex items-center gap-2 shrink-0">
         <label className="cursor-pointer text-xs text-[#8abaf0]" title="Restore a project backup">Restore<input type="file" accept="application/json,.json" className="hidden" onChange={handleRestore} /></label>
 
         <button
           onClick={handleExportWordDoc}
-          className="px-2.5 py-1 rounded-md bg-[#222832] hover:bg-[#28303d] border border-[#323a48] text-xs text-[#d5dce6] font-medium transition-colors"
+          className="glass-ghost-action text-xs font-medium"
         >
           Export .docx
         </button>
 
         <button
           onClick={handleBackup}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#436996] hover:bg-[#4e78a8] text-xs text-white font-medium shadow-sm transition-colors"
+          className="glass-primary-action text-xs font-medium"
         >
           <span>Backup</span>
         </button>
@@ -1543,53 +1585,111 @@ function TopDocumentHeaderBar() {
   );
 }
 
+function HistoryControls() {
+  const { undo, redo, pastHistory, futureHistory } = useTranslationStore();
+  return <div className="history-controls" aria-label="Edit history">
+    <button type="button" onClick={undo} disabled={!pastHistory.length} aria-label="Undo" title="Undo"><Undo2 className="w-4 h-4" /></button>
+    <button type="button" onClick={redo} disabled={!futureHistory.length} aria-label="Redo" title="Redo"><Redo2 className="w-4 h-4" /></button>
+  </div>;
+}
+
+function HeaderStatus({ progress }) {
+  const { saveError } = useTranslationStore();
+  return <div className="flex items-center gap-2 mr-4 shrink-0 text-[11px]">
+    <span className={saveError ? 'text-[#e08282]' : 'text-[#6cd4a6]'} title={saveError || 'Saved in this browser'}>{saveError || 'Saved'}</span>
+    <div className="approval-progress" role="progressbar" aria-label="Approved segments" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+      <span className="approval-progress-fill" style={{ width: `${progress}%` }} />
+      <span className="approval-progress-label">{progress}% Approved</span>
+    </div>
+  </div>;
+}
+
+function ProjectManagement({ onClose }) {
+  const { activePresetLesson, projectName, sourceFileName, targetFileName, projects, deletedProjectIds, loadPresetLesson, createProject, deleteCurrentProject } = useTranslationStore();
+  const [name, setName] = useState(projectName);
+  const [isNew, setIsNew] = useState(false);
+  const [sourceFile, setSourceFile] = useState(null);
+  const [targetFile, setTargetFile] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => { if (!isNew) setName(projectName); }, [projectName, activePresetLesson, isNew]);
+  useEffect(() => {
+    const onKeyDown = (event) => { if (event.key === 'Escape' && !creating) onClose(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose, creating]);
+  const rename = (event) => {
+    event.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) { setName(projectName); return; }
+    useTranslationStore.setState({ projectName: trimmed });
+    useTranslationStore.getState().persist();
+    useTranslationStore.getState().setToast('Project saved');
+  };
+  const create = async (event) => {
+    event.preventDefault();
+    if (!name.trim() || creating) return;
+    setCreating(true); setError('');
+    try {
+      const sourceParagraphs = sourceFile ? await parseProjectFile(sourceFile) : null;
+      const targetParagraphs = targetFile ? await parseProjectFile(targetFile) : null;
+      createProject(name.trim());
+      const store = useTranslationStore.getState();
+      if (sourceParagraphs) store.uploadFileContent('source', sourceFile.name, sourceParagraphs);
+      if (targetParagraphs) store.uploadFileContent('target', targetFile.name, targetParagraphs);
+      store.setToast('Project created');
+      setIsNew(false); setSourceFile(null); setTargetFile(null);
+    } catch (err) { setError(err.message || 'Could not import the selected files.'); }
+    finally { setCreating(false); }
+  };
+  const options = Object.fromEntries(Object.entries({ lesson2: { projectName: 'Lesson 2' }, lesson3: { projectName: 'Lesson 3' }, ...projects }).filter(([id]) => !deletedProjectIds.includes(id)));
+  return <div className="project-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !creating) onClose(); }}>
+    <section role="dialog" aria-modal="true" aria-labelledby="project-management-title" className="project-dialog">
+      <div className="flex items-center justify-between mb-4"><h2 id="project-management-title" className="text-sm font-semibold">Project management</h2><button type="button" onClick={onClose} disabled={creating} aria-label="Close project management" className="p-1 rounded hover:bg-[#28303d]"><X className="w-4 h-4" /></button></div>
+      <label htmlFor="project-select" className="project-label">{isNew ? 'Project' : 'Current project'}</label>
+      <GlassSelect id="project-select" label={isNew ? 'Project' : 'Current project'} className="project-input mb-4" disabled={creating} value={isNew ? '__new__' : activePresetLesson} onChange={(selected) => {
+        setError('');
+        if (selected === '__new__') { setIsNew(true); setName(''); setSourceFile(null); setTargetFile(null); }
+        else { setIsNew(false); setSourceFile(null); setTargetFile(null); loadPresetLesson(selected); }
+      }} options={[...Object.entries(options).map(([key, project]) => ({ value: key, label: key === activePresetLesson ? projectName : project.projectName || 'Untitled project' })), { value: '__new__', label: '+ Create new project' }]} />
+      <p className="project-autosave-note">Edits are saved locally in this browser automatically.</p>
+      <form onSubmit={isNew ? create : rename}>
+        <label htmlFor="project-name" className="project-label">Project name</label><div className="flex gap-2 mb-4"><input id="project-name" className="project-input" placeholder={isNew ? 'Enter project name' : ''} value={name} onChange={(event) => setName(event.target.value)} maxLength={120} disabled={creating} /></div>
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          {isNew ? <>
+            <label className="min-w-0"><span className="project-label">Source (English)</span><span className="project-file" title={sourceFile?.name || 'Choose a source file'}><Upload className="w-4 h-4 shrink-0" /><span className="truncate">{sourceFile?.name || 'Choose file'}</span></span><input type="file" accept=".pdf,.txt,.md" className="hidden" disabled={creating} onChange={(event) => setSourceFile(event.target.files?.[0] || null)} /></label>
+            <label className="min-w-0"><span className="project-label">Translation (Persian)</span><span className="project-file" title={targetFile?.name || 'Choose a translation file'}><Upload className="w-4 h-4 shrink-0" /><span className="truncate">{targetFile?.name || 'Choose file'}</span></span><input type="file" accept=".docx,.txt,.md" className="hidden" disabled={creating} onChange={(event) => setTargetFile(event.target.files?.[0] || null)} /></label>
+          </> : <>
+            <div className="min-w-0"><span className="project-label">Source (English)</span><button type="button" className="project-file" title={sourceFileName} onClick={() => document.getElementById('source-file-input')?.click()}><Upload className="w-4 h-4 shrink-0" /><span className="truncate">{sourceFileName}</span><span className="project-replace">Replace</span></button></div>
+            <div className="min-w-0"><span className="project-label">Translation (Persian)</span><button type="button" className="project-file" title={targetFileName} onClick={() => document.getElementById('target-file-input')?.click()}><Upload className="w-4 h-4 shrink-0" /><span className="truncate">{targetFileName}</span><span className="project-replace">Replace</span></button></div>
+          </>}
+        </div>
+        {error && <p role="alert" className="mb-3 text-xs text-[#e08282]">{error}</p>}
+        <div className="flex items-center justify-between border-t border-[#323a48] pt-4">
+          {!isNew ? <button type="button" className="text-xs text-[#e08282] hover:text-[#ffb0b0]" onClick={() => { if (window.confirm(`Remove project "${projectName}" and its saved contents? This cannot be undone.`)) { deleteCurrentProject(); setError(''); } }}>Remove project</button> : <span />}
+          <button type="submit" disabled={!name.trim() || creating} className="project-primary-action">{isNew ? (creating ? 'Creating...' : 'Create project') : 'Save changes'}</button>
+        </div>
+      </form>
+    </section>
+  </div>;
+}
+
 function VisualizerSubToolbar() {
   const {
-    activeSegmentId,
-    mergeWithNext,
-    splitSegment,
-    undo,
-    redo,
-    pastHistory,
-    futureHistory,
-    toggleSearchBar,
     autoSplitLists,
     toggleAutoSplitLists,
     normalizeAndUnmixAllSegments,
-    virtualizedMode,
-    toggleVirtualizedMode,
-    fireBezierPulse,
-    enColumnRatio,
-    setEnColumnRatio,
     setToast,
-    segments,
-    glossary,
-    saveError,
     sentenceHighlightEnabled,
     toggleSentenceHighlight,
-    dismissedWarnings,
-    showGlossaryPanel,
-    toggleGlossaryPanel,
   } = useTranslationStore();
 
-  const totalQaIssues = useMemo(
-    () => segments.reduce((acc, s) => acc + runSegmentQA(s, glossary).filter((warning) => !dismissedWarnings[warning.id]).length, 0),
-    [segments, glossary, dismissedWarnings]
-  );
-
   return (
-    <div className="app-toolbar relative z-10 h-9 bg-[#161a22] border-b border-[#2c3340] px-3 flex items-center justify-between text-xs select-none shrink-0">
-      <div className="flex items-center gap-2 shrink-0">
-        <span className="text-[#8b95a5] font-medium text-[11px] tracking-wide">Visualizer</span>
-        <span className="hidden xl:inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#222832] border border-[#2c3340] text-[10px] text-[#8b95a5]">
-          {segments.length} blocks
-        </span>
-      </div>
-
-      <div className="flex items-center gap-2 shrink-0">
+    <div className="flex flex-col items-center gap-3.5 text-xs select-none">
+      <div className="flex flex-col items-center gap-3.5">
         <details className="relative">
-          <summary className="review-control cursor-pointer list-none text-[11px]">List tools ▾</summary>
-          <div className="absolute top-full left-0 mt-1 z-30 p-2 rounded bg-[#161a22] border border-[#323a48] shadow-xl flex flex-col gap-1 min-w-[175px]">
+          <summary className="p-1.5 rounded cursor-pointer list-none hover:bg-[#222832]" title="List tools" aria-label="List tools"><List className="w-4 h-4" /></summary>
+          <div className="absolute bottom-0 left-full ml-2 z-30 p-2 rounded bg-[#161a22] border border-[#323a48] shadow-xl flex flex-col gap-1 min-w-[175px]">
         <button
           onClick={toggleAutoSplitLists}
           className={`flex items-center gap-1 px-2 py-1 rounded border text-[11px] font-medium transition-colors ${
@@ -1609,7 +1709,7 @@ function VisualizerSubToolbar() {
           title="Scan all blocks and separate any mixed lead-in sentences or trailing paragraphs from bullet lists"
         >
           <Wand2 className="w-3 h-3" />
-          <span className="hidden md:inline">Unmix Lists</span>
+          <span>Unmix Lists</span>
         </button>
           </div>
         </details>
@@ -1621,69 +1721,13 @@ function VisualizerSubToolbar() {
           <ScanText className="w-4 h-4" />
         </button>
 
-        <div className="flex items-center gap-0.5 text-[#8b95a5] border-l border-[#2c3340] pl-2">
+        <div className="flex flex-col items-center gap-3.5 text-[#8b95a5]">
           <TranslatorLauncher setToast={setToast} />
-          <button
-            onClick={undo}
-            disabled={!pastHistory.length}
-            title="Undo"
-            className="p-1 rounded hover:bg-[#222832] hover:text-[#d5dce6] disabled:opacity-30 transition-colors"
-          >
-            <Undo2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={redo}
-            disabled={!futureHistory.length}
-            title="Redo"
-            className="p-1 rounded hover:bg-[#222832] hover:text-[#d5dce6] disabled:opacity-30 transition-colors"
-          >
-            <Redo2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => mergeWithNext(activeSegmentId)}
-            title="Merge active row with next row"
-            className="p-1 rounded hover:bg-[#222832] hover:text-[#d5dce6] transition-colors"
-          >
-            <Merge className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => splitSegment(activeSegmentId)}
-            title="Split active row (or unmix list items)"
-            className="p-1 rounded hover:bg-[#222832] hover:text-[#d5dce6] transition-colors"
-          >
-            <Split className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={toggleSearchBar}
-            title="Search in English or Persian"
-            className="p-1 rounded hover:bg-[#222832] hover:text-[#d5dce6] transition-colors"
-          >
-            <Search className="w-3.5 h-3.5" />
-          </button>
+
         </div>
       </div>
 
-      <div className="flex items-center gap-3 shrink-0">
-        {Math.abs(enColumnRatio - 0.5) > 0.02 && (
-          <button
-            onClick={() => setEnColumnRatio(0.5)}
-            className="hidden lg:inline-flex px-1.5 py-0.5 rounded bg-[#222832] border border-[#323a48] text-[10px] text-[#8abaf0] hover:text-white"
-            title="Reset column width ratio to 50/50"
-          >
-            {Math.round(enColumnRatio * 100)}% / {Math.round((1 - enColumnRatio) * 100)}%
-          </button>
-        )}
-        <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-[#6cd4a6] font-medium">
-          <span className={saveError ? 'text-[#e08282]' : ''} title={saveError || 'Saved in this browser'}>{saveError || 'Saved locally'}</span>
-          {!saveError && <CheckCircle2 className="w-3.5 h-3.5 text-[#58c496]" />}
-        </div>
-        <button
-          onClick={() => { if (!showGlossaryPanel) toggleGlossaryPanel(); setToast(`${totalQaIssues} active QA notices`); }}
-          className="px-2.5 py-1 rounded bg-[#222832] hover:bg-[#28303d] border border-[#323a48] text-[11px] text-[#d5dce6] font-medium transition-colors"
-        >
-          QA Check
-        </button>
-      </div>
+
     </div>
   );
 }
@@ -1910,15 +1954,38 @@ function CenterBezierConnector({ variant, segmentId, rowElementRef }) {
 // 8. AUTO-RESIZING TEXTAREA & PERSIAN GLOSSARY PILLS
 // ============================================================================
 
+function useAutoResizeTextarea(textareaRef, value) {
+  useEffect(() => {
+    const element = textareaRef.current;
+    if (!element) return;
+    const resize = () => {
+      element.style.height = 'auto';
+      element.style.height = `${Math.max(48, element.scrollHeight)}px`;
+    };
+    resize();
+    let previousWidth = element.getBoundingClientRect().width;
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width !== undefined && Math.abs(width - previousWidth) > 0.5) {
+        previousWidth = width;
+        resize();
+      }
+    });
+    observer?.observe(element);
+    window.addEventListener('resize', resize);
+    document.fonts?.addEventListener('loadingdone', resize);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', resize);
+      document.fonts?.removeEventListener('loadingdone', resize);
+    };
+  }, [textareaRef, value]);
+}
+
 function AutoResizeTextarea({ value, onChange, onKeyDown, onFocus, onBlur, dir = 'rtl', placeholder, className, style, autoFocus }) {
   const textareaRef = useRef(null);
 
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.max(48, el.scrollHeight)}px`;
-  }, [value]);
+  useAutoResizeTextarea(textareaRef, value);
 
   return (
     <textarea
@@ -1941,27 +2008,7 @@ function AutoResizeTextarea({ value, onChange, onKeyDown, onFocus, onBlur, dir =
 function HighlightedPersianEditor({ text, sentences, selectedIndex, onChange, onSentenceSelect, onKeyDown }) {
   const textareaRef = useRef(null);
   const mirrorRef = useRef(null);
-  const supportsCustomHighlights = typeof window !== 'undefined' && Boolean(window.CSS?.highlights && window.Highlight);
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.max(48, el.scrollHeight)}px`;
-  }, [text]);
-  useEffect(() => {
-    const sentence = sentences[selectedIndex];
-    const textNode = mirrorRef.current?.firstChild;
-    if (!sentence || !textNode || !window.CSS?.highlights || !window.Highlight) return;
-    const range = document.createRange();
-    range.setStart(textNode, sentence.start);
-    range.setEnd(textNode, sentence.end);
-    const highlight = new window.Highlight(range);
-    window.CSS.highlights.set('paired-persian-sentence', highlight);
-    return () => {
-      if (window.CSS.highlights.get('paired-persian-sentence') === highlight) window.CSS.highlights.delete('paired-persian-sentence');
-    };
-  }, [text, sentences, selectedIndex]);
-
+  useAutoResizeTextarea(textareaRef, text);
   const selectAtCaret = (element) => {
     const position = element.selectionStart;
     const current = splitSentences(element.value);
@@ -1972,8 +2019,8 @@ function HighlightedPersianEditor({ text, sentences, selectedIndex, onChange, on
 
   return (
     <div className="highlight-editor" dir="rtl" lang="fa">
-      <div ref={mirrorRef} className="highlight-editor-mirror" aria-hidden="true" data-native-highlights={supportsCustomHighlights}>
-        {supportsCustomHighlights ? text : sentences.map((sentence, index) => <span key={sentence.start} className={selectedIndex === index ? 'sentence-highlight' : ''}>{sentence.text}</span>)}
+      <div ref={mirrorRef} className="highlight-editor-mirror" aria-hidden="true">
+        {sentences.length ? sentences.map((sentence, index) => <span key={sentence.start} className={selectedIndex === index ? 'sentence-highlight' : ''}>{sentence.text}</span>) : text}
       </div>
       <textarea ref={textareaRef} dir="rtl" lang="fa" value={text} rows={1}
         aria-label="Edit Persian translation" placeholder="Enter or edit the Persian translation..."
@@ -1991,7 +2038,7 @@ function PersianTextWithGlossaryPills({ text, glossary, onClickEdit }) {
         onClick={onClickEdit}
         dir="rtl"
         style={{ fontFamily: "'Vazirmatn', 'Tahoma', sans-serif" }}
-        className="text-[13.5px] leading-[1.95] text-[#8b95a5]/50 text-right cursor-text py-1"
+        className="text-[13.5px] leading-[1.95] text-[#8b95a5]/50 text-right cursor-text px-2 py-1.5"
       >
         ترجمه فارسی را اینجا وارد یا ویرایش کنید...
       </div>
@@ -2009,7 +2056,7 @@ function PersianTextWithGlossaryPills({ text, glossary, onClickEdit }) {
         onClick={onClickEdit}
         dir="rtl"
         style={{ fontFamily: "'Vazirmatn', 'Tahoma', sans-serif" }}
-        className="text-[13.5px] leading-[1.95] text-[#d5dce6] text-justify cursor-text whitespace-pre-wrap"
+        className="text-[13.5px] leading-[1.95] text-[#d5dce6] text-justify cursor-text whitespace-pre-wrap px-2 py-1.5"
       >
         {text}
       </div>
@@ -2025,7 +2072,7 @@ function PersianTextWithGlossaryPills({ text, glossary, onClickEdit }) {
       onClick={onClickEdit}
       dir="rtl"
       style={{ fontFamily: "'Vazirmatn', 'Tahoma', sans-serif" }}
-      className="text-[13.5px] leading-[1.95] text-[#d5dce6] text-justify cursor-text whitespace-pre-wrap"
+      className="text-[13.5px] leading-[1.95] text-[#d5dce6] text-justify cursor-text whitespace-pre-wrap px-2 py-1.5"
     >
       {parts.map((part, idx) => {
         if (faTerms.includes(part)) {
@@ -2055,6 +2102,44 @@ const SPRING_TRANSITION = {
   mass: 0.75,
 };
 
+function BlockActions({ label, actions }) {
+  const [position, setPosition] = useState(null);
+  const buttonRef = useRef(null);
+  const menuRef = useRef(null);
+  useEffect(() => {
+    if (!position) return;
+    menuRef.current?.querySelector('button:not(:disabled)')?.focus();
+    const closeOutside = (event) => { if (!buttonRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) setPosition(null); };
+    const closeOnKey = (event) => { if (event.key === 'Escape') { setPosition(null); buttonRef.current?.focus(); } };
+    const closeOnScroll = () => setPosition(null);
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', closeOnKey);
+    window.addEventListener('scroll', closeOnScroll, true);
+    window.addEventListener('resize', closeOnScroll);
+    return () => { document.removeEventListener('pointerdown', closeOutside); document.removeEventListener('keydown', closeOnKey); window.removeEventListener('scroll', closeOnScroll, true); window.removeEventListener('resize', closeOnScroll); };
+  }, [position]);
+  const open = (event) => {
+    event.stopPropagation();
+    if (position) { setPosition(null); return; }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const height = actions.length * 35 + 18;
+    setPosition({ left: Math.max(8, Math.min(window.innerWidth - 232, rect.right - 224)), top: Math.max(8, Math.min(window.innerHeight - height - 8, rect.bottom + 5)) });
+  };
+  return <>
+    <button ref={buttonRef} type="button" className="block-icon-button" onClick={open} aria-label={label} title={label} aria-haspopup="menu" aria-expanded={!!position}><MoreVertical className="w-4 h-4" /></button>
+    {position && createPortal(<div ref={menuRef} role="menu" className="block-actions-menu" style={position} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => {
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const items = [...event.currentTarget.querySelectorAll('button:not(:disabled)')];
+      const index = items.indexOf(document.activeElement);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      items[next]?.focus();
+    }}>
+      {actions.map((action) => <button key={action.label} type="button" role="menuitem" className={action.danger ? 'block-action-danger' : ''} disabled={action.disabled} onClick={() => { setPosition(null); action.run(); }}>{action.icon && <action.icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />}<span>{action.label}</span></button>)}
+    </div>, document.body)}
+  </>;
+}
+
 const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
   { segment, rowIndex, totalRows, stacked },
   forwardedRef
@@ -2078,6 +2163,7 @@ const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
     movePersianBlock,
     removeRowAt,
     splitSegmentIntoListItems,
+    mergeWithNext, splitSegment,
     autoAlignCards,
     enColumnRatio,
     sentenceHighlightEnabled,
@@ -2136,7 +2222,9 @@ const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
 
   const isActive = activeSegmentId === segment.id;
   const selectedMatch = sentenceHighlightEnabled && selectedSentence?.segmentId === segment.id
-    ? matchSentence(segment.english, segment.editedPersian, selectedSentence.index) : null;
+    ? (selectedSentence.sourceIndex != null
+      ? { sourceIndex: selectedSentence.sourceIndex, translationIndex: selectedSentence.index, certain: splitSentences(segment.english).length === splitSentences(segment.editedPersian).length, sourceCount: splitSentences(segment.english).length, translationCount: splitSentences(segment.editedPersian).length }
+      : matchSentence(segment.english, segment.editedPersian, selectedSentence.index)) : null;
   const enSentences = useMemo(() => splitSentences(segment.english), [segment.english]);
   const faSentences = useMemo(() => splitSentences(segment.editedPersian), [segment.editedPersian]);
   const qaWarnings = useMemo(() => runSegmentQA(segment, glossary).filter((warning) => !dismissedWarnings[warning.id]), [segment, glossary, dismissedWarnings]);
@@ -2225,19 +2313,17 @@ const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
         transition={SPRING_TRANSITION}
         style={leftFlexStyle}
         data-en-card={segment.index}
+        data-active={isActive}
         className={`w-full min-w-0 rounded-lg border p-3.5 transition-colors flex flex-col justify-between ${leftCardClasses}`}
       >
         <div>
-          <div className="flex items-center justify-between mb-2 pb-1.5 border-b border-[#2c3340]/80">
+          <div className="flex min-h-[35px] items-center justify-between mb-2 pb-1.5 border-b border-[#2c3340]/80">
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] font-semibold tracking-wider text-[#8b95a5] uppercase">
-                SEG #{segment.index} • EN
-              </span>
-              <span className="px-1.5 py-0.5 rounded bg-[#1b2028] text-[9.5px] font-medium text-[#8b95a5] border border-[#2c3340]">
-                PDF{segment.sourcePageVerified && segment.sourcePage ? ` · p. ${segment.sourcePage}` : ''}
+                EN #{segment.index}
               </span>
               {isListSegment && (
-                <span className="px-1.5 py-0.5 rounded bg-[#26303d] text-[9.5px] font-medium text-[#8abaf0] border border-[#4b83b8]/50 flex items-center gap-1">
+                <span className="px-2 py-0.5 rounded-full bg-[#26303d] text-[9.5px] font-medium text-[#8abaf0] border border-[#4b83b8]/50 flex items-center gap-1">
                   <List className="w-2.5 h-2.5" />
                   List Item
                 </span>
@@ -2247,78 +2333,17 @@ const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
 
             <div className="flex items-center gap-0.5 text-[#8b95a5] opacity-80 group-hover:opacity-100 transition-opacity">
               {markControl('en')}
-              {canSplitIntoList && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    splitSegmentIntoListItems(rowIndex);
-                  }}
-                  title="Split semicolon or bulleted clauses into separate list blocks"
-                  className="p-1 rounded hover:bg-[#1b2028] hover:text-[#8abaf0] transition-colors"
-                >
-                  <List className="w-3 h-3" />
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  moveEnglishBlock(rowIndex, 'up');
-                }}
-                disabled={rowIndex === 0}
-                title="Move English block up"
-                className="p-1 rounded hover:bg-[#1b2028] hover:text-[#d5dce6] disabled:opacity-25"
-              >
-                <ArrowUp className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  moveEnglishBlock(rowIndex, 'down');
-                }}
-                disabled={rowIndex === totalRows - 1}
-                title="Move English block down"
-                className="p-1 rounded hover:bg-[#1b2028] hover:text-[#d5dce6] disabled:opacity-25"
-              >
-                <ArrowDown className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsEditingSource((v) => !v);
-                }}
-                title="Edit English source paragraph"
-                className={`p-1 rounded hover:bg-[#1b2028] ${
-                  isEditingSource ? 'text-[#7cb7f0]' : 'hover:text-[#d5dce6]'
-                }`}
-              >
-                <Edit3 className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  insertEnglishBlockAt(rowIndex, 'after');
-                }}
-                title="Insert English block below"
-                className="p-1 rounded hover:bg-[#1b2028] hover:text-[#6cd4a6]"
-              >
-                <Plus className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeEnglishBlock(rowIndex);
-                }}
-                title="Remove ONLY this English block (shifts remaining English blocks up)"
-                className="p-1 rounded hover:bg-[#382328] hover:text-[#e08282]"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
+              <button type="button" onClick={(event) => { event.stopPropagation(); setIsEditingSource((value) => !value); }} title="Edit English source" aria-label="Edit English source" className="block-icon-button"><Edit3 className="w-4 h-4" /></button>
+              <BlockActions label={`More source actions for segment ${segment.index}`} actions={[
+                { label: 'Move block up', icon: ArrowUp, disabled: rowIndex === 0, run: () => moveEnglishBlock(rowIndex, 'up') },
+                { label: 'Move block down', icon: ArrowDown, disabled: rowIndex === totalRows - 1, run: () => moveEnglishBlock(rowIndex, 'down') },
+                { label: 'Insert block below', icon: Plus, run: () => insertEnglishBlockAt(rowIndex, 'after') },
+                ...(canSplitIntoList ? [{ label: 'Split list items', icon: List, run: () => splitSegmentIntoListItems(rowIndex) }] : []),
+                { label: 'Split pair', icon: Split, run: () => splitSegment(segment.id) },
+                { label: 'Merge pair with next', icon: Merge, disabled: rowIndex === totalRows - 1, run: () => mergeWithNext(segment.id) },
+                { label: 'Remove block', icon: Trash2, danger: true, run: () => removeEnglishBlock(rowIndex) },
+                { label: 'Delete pair', icon: Trash2, danger: true, run: () => { if (window.confirm('Delete this source and translation pair?')) removeRowAt(rowIndex); } },
+              ]} />
             </div>
           </div>
 
@@ -2330,16 +2355,17 @@ const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
               onChange={(e) => updateEnglishText(segment.id, e.target.value)}
               onBlur={() => setIsEditingSource(false)}
               autoFocus
-              className="w-full bg-[#161a22] border border-[#4b83b8]/60 rounded p-2 text-[13px] leading-[1.68] text-[#d5dce6] focus:outline-none resize-none text-justify"
+              className="w-full bg-[#161a22] border border-[#4b83b8]/60 rounded px-2 py-1.5 text-[13.5px] leading-[1.95] text-[#d5dce6] focus:outline-none resize-none text-justify"
             />
           ) : (
             <p
               onDoubleClick={() => setIsEditingSource(true)}
               title="Double-click to edit English text"
-              className="text-[13px] leading-[1.68] text-[#d5dce6] font-normal select-text text-justify"
+              className="px-2 py-1.5 text-[13.5px] leading-[1.95] text-[#d5dce6] font-normal select-text text-justify"
             >
               {sentenceHighlightEnabled && enSentences.length ? enSentences.map((sentence, index) => (
-                <span key={sentence.start} className={selectedMatch?.sourceIndex === index ? 'sentence-highlight' : ''}>
+                <span key={sentence.start} className={`sentence-select ${selectedMatch?.sourceIndex === index ? 'sentence-highlight' : ''}`}
+                  onClick={() => { if (window.getSelection()?.toString()) return; const translationIndex = faSentences.length ? Math.min(faSentences.length - 1, Math.floor(index * faSentences.length / enSentences.length)) : null; setActiveSegment(segment.id); useTranslationStore.setState({ selectedSentence: { segmentId: segment.id, index: translationIndex, sourceIndex: index } }); }}>
                   <EnglishSourceWithUnderlines text={sentence.text} glossary={glossary} onInsertTerm={insertGlossaryIntoActive} />
                 </span>
               )) : <EnglishSourceWithUnderlines text={segment.english} glossary={glossary} onInsertTerm={insertGlossaryIntoActive} />}
@@ -2363,16 +2389,17 @@ const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
         transition={SPRING_TRANSITION}
         style={rightFlexStyle}
         data-fa-card={segment.index}
+        data-active={isActive}
         className={`w-full min-w-0 rounded-lg border p-3.5 transition-colors ${stacked ? 'mt-2' : ''} flex flex-col justify-between ${rightCardClasses}`}
       >
         <div>
-          <div className="flex items-center justify-between mb-2 pb-1.5 border-b border-[#2c3340]/70">
+          <div className="flex min-h-[35px] items-center justify-between mb-2 pb-1.5 border-b border-[#2c3340]/70">
             <div className="flex items-center gap-1.5">
               <span className="text-[10.5px] text-[#8b95a5] font-medium">
                 {segment.status === 'unreviewed' ? 'Unreviewed' : `FA #${segment.index}`}
               </span>
               {qaWarnings.length > 0 && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#2c241d] border border-[#6b4f2d] text-[#d49b4b] text-[10px] font-semibold">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#2c241d] border border-[#6b4f2d] text-[#d49b4b] text-[10px] font-semibold">
                   <AlertTriangle className="w-2.5 h-2.5" />
                   QA Flags
                 </span>
@@ -2380,83 +2407,20 @@ const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
             </div>
 
             <div className="flex items-center gap-1">
-              <select aria-label={`Review status for segment ${segment.index}`} value={segment.status}
-                onClick={(e) => e.stopPropagation()} onChange={(e) => setSegmentStatus(segment.id, e.target.value)}
-                className="rounded bg-[#26303d] border border-[#405064] text-[#bdd9f5] text-[10px] px-1 py-1">
-                <option value="unreviewed">Unreviewed</option><option value="edited">In progress</option>
-                <option value="needs_check">Needs attention</option><option value="approved">Approved</option>
-              </select>
+              <span className="status-control" data-status={segment.status}><span className="status-dot" aria-hidden="true" /><GlassSelect status={segment.status} label={`Review status for segment ${segment.index}`} value={segment.status} onChange={(value) => setSegmentStatus(segment.id, value)} options={REVIEW_STATUS_OPTIONS} /></span>
 
               <div className="flex items-center gap-0.5 text-[#8b95a5] opacity-80 group-hover:opacity-100 transition-opacity ml-1">
                 {!showDiffInline && markControl('fa')}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    movePersianBlock(rowIndex, 'up');
-                  }}
-                  disabled={rowIndex === 0}
-                  title="Move Persian block up"
-                  className="p-1 rounded hover:bg-[#1b2028] hover:text-[#d5dce6] disabled:opacity-25"
-                >
-                  <ArrowUp className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    movePersianBlock(rowIndex, 'down');
-                  }}
-                  disabled={rowIndex === totalRows - 1}
-                  title="Move Persian block down"
-                  className="p-1 rounded hover:bg-[#1b2028] hover:text-[#d5dce6] disabled:opacity-25"
-                >
-                  <ArrowDown className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setEditingCommentSegId(segment.id);
-                  }}
-                  title="Add comment to this segment"
-                  className="p-1 rounded hover:bg-[#1b2028] hover:text-[#7cb7f0]"
-                >
-                  <MessageSquare className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    insertPersianBlockAt(rowIndex, 'after');
-                  }}
-                  title="Insert new Persian block below"
-                  className="p-1 rounded hover:bg-[#1b2028] hover:text-[#6cd4a6]"
-                >
-                  <Plus className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removePersianBlock(rowIndex);
-                  }}
-                  title="Remove ONLY this Persian block (shifts subsequent Persian blocks up)"
-                  className="p-1 rounded hover:bg-[#382328] hover:text-[#e08282]"
-                >
-                  <Trash2 className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeRowAt(rowIndex);
-                  }}
-                  title="Delete entire paired row"
-                  className="px-1.5 py-0.5 rounded bg-[#1b2028] hover:bg-[#382328] text-[9.5px] text-[#8b95a5] hover:text-[#e08282] border border-[#2c3340] ml-0.5"
-                >
-                  Del Row
-                </button>
+                <button type="button" onClick={(event) => { event.stopPropagation(); setEditingCommentSegId(segment.id); }} title="Add comment to this segment" aria-label="Add comment to this segment" className="block-icon-button"><MessageSquare className="w-4 h-4" /></button>
+                <BlockActions label={`More translation actions for segment ${segment.index}`} actions={[
+                  { label: 'Move block up', icon: ArrowUp, disabled: rowIndex === 0, run: () => movePersianBlock(rowIndex, 'up') },
+                  { label: 'Move block down', icon: ArrowDown, disabled: rowIndex === totalRows - 1, run: () => movePersianBlock(rowIndex, 'down') },
+                  { label: 'Insert block below', icon: Plus, run: () => insertPersianBlockAt(rowIndex, 'after') },
+                  { label: 'Split pair', icon: Split, run: () => splitSegment(segment.id) },
+                  { label: 'Merge pair with next', icon: Merge, disabled: rowIndex === totalRows - 1, run: () => mergeWithNext(segment.id) },
+                  { label: 'Remove block', icon: Trash2, danger: true, run: () => removePersianBlock(rowIndex) },
+                  { label: 'Delete pair', icon: Trash2, danger: true, run: () => { if (window.confirm('Delete this source and translation pair?')) removeRowAt(rowIndex); } },
+                ]} />
               </div>
             </div>
           </div>
@@ -2466,7 +2430,7 @@ const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
             <div
               dir="rtl"
               style={{ fontFamily: "'Vazirmatn', 'Tahoma', sans-serif" }}
-              className="text-[13.5px] leading-[1.95] text-right p-1 rounded"
+              className="text-[13.5px] leading-[1.95] text-justify px-2 py-1.5 rounded"
             >
               {diffTokens.map((tok, idx) => {
                 if (tok.type === 'added') {
@@ -2505,7 +2469,7 @@ const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
               onKeyDown={handleKeyDown} onBlur={() => setIsFocusedFa(false)} autoFocus
               placeholder="Enter or edit the Persian translation..."
               style={{ fontFamily: "'Vazirmatn', 'Tahoma', sans-serif" }}
-              className="w-full bg-transparent text-[13.5px] leading-[1.95] text-[#d5dce6] placeholder-[#8b95a5]/50 focus:outline-none resize-none text-justify selection:bg-[#4b83b8]/40 selection:text-white"
+              className="persian-editor-plain w-full bg-transparent text-[13.5px] leading-[1.95] text-[#d5dce6] placeholder-[#8b95a5]/50 focus:outline-none resize-none text-justify selection:bg-[#4b83b8]/40 selection:text-white"
             />
           ) : (
             <PersianTextWithGlossaryPills
@@ -2954,11 +2918,14 @@ export default function App() {
     glossary,
     dismissedWarnings,
     activeSegmentId,
+    selectedSentence,
     navigateToSegment,
     saveError,
   } = useTranslationStore();
 
   const [showDictionary, setShowDictionary] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showProjects, setShowProjects] = useState(false);
   const [stackedSegments, setStackedSegments] = useState(() => window.innerWidth <= window.screen.availWidth * 0.65);
   useEffect(() => {
     const updateLayout = () => {
@@ -3001,22 +2968,6 @@ export default function App() {
     });
   }, [segments, searchQuery, reviewFilter, glossary, dismissedWarnings]);
   const segmentIndices = useMemo(() => new Map(segments.map((segment, index) => [segment.id, index])), [segments]);
-  const navigateRelative = (delta) => {
-    const index = filteredSegments.findIndex((segment) => segment.id === activeSegmentId);
-    const target = filteredSegments[Math.max(0, Math.min(filteredSegments.length - 1, (index < 0 ? 0 : index + delta)))];
-    if (target) navigateToSegment(target.id, true);
-  };
-  useEffect(() => {
-    const handleNavigation = (event) => {
-      if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
-        event.preventDefault();
-        navigateRelative(event.key === 'ArrowUp' ? -1 : 1);
-      }
-    };
-    window.addEventListener('keydown', handleNavigation);
-    return () => window.removeEventListener('keydown', handleNavigation);
-  }, [filteredSegments, activeSegmentId]);
-
   // 60fps Virtualized Windowing Calculation for large PDF/Word books
   const { visibleSegments, topSpacerHeight, bottomSpacerHeight, startIndex } = useMemo(() => {
     if (!virtualizedMode || filteredSegments.length <= 45) {
@@ -3145,12 +3096,14 @@ export default function App() {
       }}
       className="h-screen w-full bg-[#1b2028] text-[#d5dce6] flex overflow-hidden select-none"
     >
-      <LeftActivityRail showDictionary={showDictionary} onToggleDictionary={() => setShowDictionary((open) => !open)} />
+      <LeftActivityRail showDictionary={showDictionary} onToggleDictionary={() => { setShowDictionary((open) => !open); setShowSuggestions(false); }} showSuggestions={showSuggestions} onToggleSuggestions={() => { if (!showSuggestions && !useTranslationStore.getState().sentenceHighlightEnabled) useTranslationStore.getState().toggleSentenceHighlight(); setShowSuggestions((open) => !open); setShowDictionary(false); }} filteredCount={filteredSegments.length} onOpenProjects={() => setShowProjects(true)} />
 
+      {showProjects && <ProjectManagement onClose={() => setShowProjects(false)} />}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <TopDocumentHeaderBar />
-        <VisualizerSubToolbar />
         {saveError && <div role="alert" className="px-4 py-2 text-xs bg-[#4a252b] text-[#ffd0d0] border-b border-[#9b4c56]">{saveError}</div>}
+
+        {reviewFilter !== 'all' && <div className="active-filter" role="status"><Filter className="w-3.5 h-3.5" /><span>{({ unmatched: 'Unmatched blocks', unreviewed: 'Unreviewed', edited: 'In progress', needs_check: 'Needs attention', approved: 'Approved', warnings: 'QA warnings' })[reviewFilter]} {'\u00b7'} {filteredSegments.length} / {segments.length}</span><button type="button" onClick={() => setReviewFilter('all')}>Clear filter</button></div>}
 
         {showSearchBar && (
           <div className="bg-[#161a22] border-b border-[#2c3340] px-4 py-1.5 flex items-center gap-2">
@@ -3176,14 +3129,6 @@ export default function App() {
 
         <div className="flex-1 flex min-h-0 overflow-hidden">
           <div className="flex-1 flex flex-col min-w-0 bg-[#1b2028]">
-            <div className="review-navigation px-4 py-1.5 flex items-center gap-2 border-b border-[#2c3340] text-xs">
-              <button type="button" onClick={() => navigateRelative(-1)} title="Previous segment (Alt+Up)" className="review-control">↑ Previous</button>
-              <button type="button" onClick={() => navigateRelative(1)} title="Next segment (Alt+Down)" className="review-control">Next ↓</button>
-              <label className="ml-auto text-[#8b95a5]">Show <select aria-label="Filter segments" value={reviewFilter} onChange={(e) => setReviewFilter(e.target.value)} className="review-control ml-1">
-                <option value="all">All segments</option><option value="unmatched">Unmatched blocks</option><option value="unreviewed">Unreviewed</option><option value="edited">In progress</option><option value="needs_check">Needs attention</option><option value="approved">Approved</option><option value="warnings">QA warnings</option>
-              </select></label>
-              <span className="text-[#8b95a5]">{filteredSegments.length} / {segments.length}</span>
-            </div>
             {/* Sticky Column Sub-Headers with Draggable EN/FA Column Splitter */}
             <div
               ref={editorHeaderRef}
@@ -3193,7 +3138,7 @@ export default function App() {
                 style={{ flexBasis: `${Math.round(enColumnRatio * 100)}%`, flexGrow: 0, flexShrink: 0 }}
                 className="flex items-center justify-between pr-2 min-w-[180px]"
               >
-                <span className="text-[#8b95a5] font-medium truncate">Source (English)</span>
+                <span className="text-[#8b95a5] font-medium whitespace-nowrap">Source (English)</span>
                 <button
                   onClick={() => insertEnglishBlockAt(segments.length - 1, 'after')}
                   className="px-2 py-0.5 rounded bg-[#222832] hover:bg-[#28303d] border border-[#323a48] text-[10.5px] text-[#8abaf0] flex items-center gap-1 transition-colors shrink-0"
@@ -3214,9 +3159,7 @@ export default function App() {
                 </div>
 
               <div className="flex-1 flex items-center justify-between pl-2 min-w-[200px]">
-                <span className="text-[#8b95a5] font-medium truncate hidden sm:inline">
-                  Translation (Persian) – RTL / R-to-L
-                </span>
+                <span className="text-[#8b95a5] font-medium whitespace-nowrap">Translation (Persian)</span>
                 <div className="flex items-center gap-2 ml-auto">
                   <button
                     onClick={() => insertPersianBlockAt(segments.length - 1, 'after')}
@@ -3318,6 +3261,7 @@ export default function App() {
             )}
           </AnimatePresence>
           {showDictionary && <DictionaryPanel onClose={() => setShowDictionary(false)} />}
+          {showSuggestions && <SuggestionsPanel selectedSentence={selectedSentence} segment={segments.find((segment) => segment.id === selectedSentence?.segmentId)} onClose={() => setShowSuggestions(false)} />}
         </div>
       </div>
 
