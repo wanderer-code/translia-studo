@@ -11,6 +11,10 @@ npm run dev
 
 Create a production build with `npm run build` and preview it with `npm run preview`.
 
+## GitHub Pages
+
+The GitHub Actions workflow builds and deploys the app at `/translia-studo/` when changes are pushed to `main`. In the repository settings, under **Pages → Build and deployment**, choose **GitHub Actions** as the source. To deploy a fork under a different repository name, update the `--base` path in `.github/workflows/deploy-pages.yml` to match it.
+
 On Windows, the translator icon in the top toolbar opens ChatGPT, DeepL, Google Translate, and Abadis in a separate Chrome incognito window. The launcher runs as part of the local Vite server (`npm run dev` or `npm run preview`), uses fixed website addresses, and requires Chrome in a standard installation folder. This feature is unavailable when the built files are hosted without that local server.
 
 ## Included lessons
