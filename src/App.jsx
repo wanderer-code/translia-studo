@@ -240,22 +240,22 @@ const historySnapshot = (state) => JSON.parse(JSON.stringify({
 }));
 
 const useTranslationStore = create((set, get) => ({
-  activePresetLesson: saved?.activePresetLesson || 'lesson2',
-  projectName: saved?.projectName || (saved?.activePresetLesson === 'lesson3' ? 'Lesson 3' : 'Lesson 2'),
-  sourceFileName: saved?.sourceFileName || '02-1.pdf',
-  targetFileName: saved?.targetFileName || 'Game_Theory_Lesson_2_Persian.docx',
-  segments: saved?.segments || INITIAL_SEGMENTS,
+  activePresetLesson: saved?.activePresetLesson || 'lesson3',
+  projectName: saved?.projectName || (saved?.activePresetLesson === 'lesson2' ? 'Lesson 2' : 'Lesson 3'),
+  sourceFileName: saved?.sourceFileName || '03.pdf',
+  targetFileName: saved?.targetFileName || 'Game_Theory_Lesson_3_Persian.docx',
+  segments: saved?.segments || LESSON_3_SEGMENTS,
   glossary: saved?.glossary || INITIAL_GLOSSARY,
-  comments: saved?.comments || INITIAL_COMMENTS,
+  comments: saved?.comments || [],
   projects: saved?.projects || {},
   deletedProjectIds: saved?.deletedProjectIds || [],
   saveError: null,
-  sentenceHighlightEnabled: saved?.sentenceHighlightEnabled ?? false,
+  sentenceHighlightEnabled: saved?.sentenceHighlightEnabled ?? true,
   selectedSentence: null,
   reviewFilter: 'all',
   dismissedWarnings: saved?.dismissedWarnings || {},
 
-  activeSegmentId: 'seg-10',
+  activeSegmentId: (saved?.segments || LESSON_3_SEGMENTS)[0]?.id,
   editingCommentSegId: null,
   showDiffInline: false,
   searchQuery: '',
@@ -269,8 +269,8 @@ const useTranslationStore = create((set, get) => ({
   fireBezierPulse: (segmentId) =>
     set({ pulseTrigger: { segmentId: segmentId || get().activeSegmentId, timestamp: Date.now() } }),
 
-  showCommentsPanel: saved?.showCommentsPanel !== undefined ? saved.showCommentsPanel : true,
-  showGlossaryPanel: saved?.showGlossaryPanel !== undefined ? saved.showGlossaryPanel : true,
+  showCommentsPanel: false,
+  showGlossaryPanel: false,
   commentsPanelWidth: 280,
   glossaryPanelWidth: 265,
 
