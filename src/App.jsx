@@ -2921,6 +2921,8 @@ export default function App() {
     selectedSentence,
     navigateToSegment,
     saveError,
+    activePresetLesson,
+    sourceFileName,
   } = useTranslationStore();
 
   const [showDictionary, setShowDictionary] = useState(false);
@@ -2942,6 +2944,14 @@ export default function App() {
   const editorHeaderRef = useRef(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(720);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageInput, setPageInput] = useState('1');
+  const pageNavigationUntil = useRef(0);
+  const lessonPageCount = activePresetLesson === 'lesson2' && sourceFileName === '02-1.pdf' ? 8
+    : activePresetLesson === 'lesson3' && sourceFileName === '03.pdf' ? 10 : 0;
+
+  useEffect(() => { setCurrentPage(1); setPageInput('1'); }, [activePresetLesson, sourceFileName]);
+  useEffect(() => { setPageInput(String(currentPage)); }, [currentPage]);
 
   useEffect(() => {
     const id = 'translia-vazirmatn-font-v9';
@@ -2968,9 +2978,25 @@ export default function App() {
     });
   }, [segments, searchQuery, reviewFilter, glossary, dismissedWarnings]);
   const segmentIndices = useMemo(() => new Map(segments.map((segment, index) => [segment.id, index])), [segments]);
+  const pageRows = useMemo(() => {
+    if (!lessonPageCount) return [];
+    const visibleIds = new Set(filteredSegments.map((segment) => segment.id));
+    const rows = [];
+    let lastPage = 1;
+    let nextMarker = 1;
+    for (const segment of segments) {
+      const page = Number.isInteger(segment.sourcePage) && segment.sourcePage >= 1 && segment.sourcePage <= lessonPageCount ? segment.sourcePage : lastPage;
+      lastPage = page;
+      if (!visibleIds.has(segment.id)) continue;
+      while (nextMarker <= page) rows.push({ type: 'page', page: nextMarker++ });
+      rows.push({ type: 'segment', segment });
+    }
+    while (nextMarker <= lessonPageCount) rows.push({ type: 'page', page: nextMarker++ });
+    return rows;
+  }, [segments, filteredSegments, lessonPageCount]);
   // 60fps Virtualized Windowing Calculation for large PDF/Word books
   const { visibleSegments, topSpacerHeight, bottomSpacerHeight, startIndex } = useMemo(() => {
-    if (!virtualizedMode || filteredSegments.length <= 45) {
+    if (lessonPageCount || !virtualizedMode || filteredSegments.length <= 45) {
       return {
         visibleSegments: filteredSegments,
         topSpacerHeight: 0,
@@ -2991,7 +3017,36 @@ export default function App() {
       bottomSpacerHeight: Math.max(0, (filteredSegments.length - end) * avgRowHeight),
       startIndex: start,
     };
-  }, [virtualizedMode, filteredSegments, scrollTop, viewportHeight]);
+  }, [virtualizedMode, filteredSegments, scrollTop, viewportHeight, lessonPageCount]);
+
+  const goToPage = (page) => {
+    if (!Number.isInteger(page) || page < 1 || page > lessonPageCount) {
+      setPageInput(String(currentPage));
+      return;
+    }
+    const container = workspaceRef.current;
+    const marker = container?.querySelector(`[data-source-page="${page}"]`);
+    if (!container || !marker) return;
+    const top = marker.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - 8;
+    const smooth = Math.abs(page - currentPage) === 1 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    pageNavigationUntil.current = Date.now() + (smooth ? 800 : 100);
+    setCurrentPage(page);
+    setPageInput(String(page));
+    container.scrollTo({ top, behavior: smooth ? 'smooth' : 'instant' });
+  };
+
+  const updatePageFromScroll = (container) => {
+    if (!lessonPageCount || Date.now() < pageNavigationUntil.current) return;
+    const markers = [...container.querySelectorAll('[data-source-page]')];
+    const boundary = container.getBoundingClientRect().top + 40;
+    let page = Number(markers[0]?.dataset.sourcePage || 1);
+    for (const marker of markers) {
+      if (marker.getBoundingClientRect().top > boundary) break;
+      page = Number(marker.dataset.sourcePage);
+    }
+    if (container.scrollHeight - container.scrollTop - container.clientHeight < 4) page = lessonPageCount;
+    setCurrentPage(page);
+  };
 
   const runLiveDOMAlignmentCheck = useCallback(() => {
     if (!workspaceRef.current) return;
@@ -3190,17 +3245,19 @@ export default function App() {
             {/* Scrollable Paragraph Rows with Motion Layout Physics & Optional Virtualization */}
             <div
               ref={workspaceRef}
-              onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+              onScroll={(e) => { setScrollTop(e.currentTarget.scrollTop); updatePageFromScroll(e.currentTarget); }}
               className={`flex-1 overflow-y-auto px-4 py-3.5 space-y-3 ${segments.length >= 100 ? 'large-document' : ''}`}
             >
               {topSpacerHeight > 0 && <div style={{ height: topSpacerHeight }} />}
 
               <AnimatePresence initial={false}>
-                {visibleSegments.map((seg) => (
+                {(lessonPageCount ? pageRows : visibleSegments.map((segment) => ({ type: 'segment', segment }))).map((item) => item.type === 'page' ? (
+                  <div key={`page-${item.page}`} data-source-page={item.page} className="source-page-divider"><span>Page {item.page}</span></div>
+                ) : (
                   <BilingualSegmentRow
-                    key={seg.id}
-                    segment={seg}
-                    rowIndex={segmentIndices.get(seg.id)}
+                    key={item.segment.id}
+                    segment={item.segment}
+                    rowIndex={segmentIndices.get(item.segment.id)}
                     totalRows={segments.length}
                     stacked={stackedSegments}
                   />
@@ -3233,6 +3290,22 @@ export default function App() {
                 </button>
               </div>
             </div>
+            {lessonPageCount > 0 && <nav className="page-navigation" aria-label="Source PDF pages">
+              <div className="page-navigation-group">
+              <button type="button" onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 1} aria-label="Previous page">‹</button>
+              <div className="page-navigation-numbers">
+                {Array.from({ length: Math.min(5, lessonPageCount) }, (_, i) => Math.max(1, Math.min(currentPage - 2, lessonPageCount - 4)) + i).map((page) => <React.Fragment key={page}>
+                  <button type="button" onClick={() => goToPage(page)} aria-label={`Page ${page}`} aria-current={currentPage === page ? 'page' : undefined}>{page}</button>
+                </React.Fragment>)}
+              </div>
+              <button type="button" onClick={() => goToPage(currentPage + 1)} disabled={currentPage === lessonPageCount} aria-label="Next page">›</button>
+              </div>
+              <form onSubmit={(event) => { event.preventDefault(); goToPage(Number(pageInput)); }} className="page-navigation-go">
+                <label htmlFor="source-page-input">Go to</label>
+                <input id="source-page-input" type="number" min="1" max={lessonPageCount} value={pageInput} onChange={(event) => setPageInput(event.target.value)} />
+                <button type="submit">Go</button>
+              </form>
+            </nav>}
           </div>
 
           <AnimatePresence>
