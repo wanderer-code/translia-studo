@@ -11,7 +11,7 @@ export { toPersianDigits, computeWordDiff, runSegmentQA } from './review-quality
 import DictionaryPanel from './DictionaryPanel.jsx';
 import SuggestionsPanel from './SuggestionsPanel.jsx';
 import TranslatorLauncher from './TranslatorLauncher.jsx';
-import { captureTextSelection, updateMarksForEdit, useTextMarks } from './text-highlights.js';
+import { captureTextSelection, mergeLineRects, updateMarksForEdit, useTextMarks } from './text-highlights.js';
 import { splitSentences, matchSentence } from './sentences.js';
 import {
   CheckCircle2,
@@ -2007,7 +2007,34 @@ function AutoResizeTextarea({ value, onChange, onKeyDown, onFocus, onBlur, dir =
 
 function HighlightedPersianEditor({ text, sentences, selectedIndex, onChange, onSentenceSelect, onKeyDown }) {
   const textareaRef = useRef(null);
+  const mirrorRef = useRef(null);
+  const sentenceLayerRef = useRef(null);
   useAutoResizeTextarea(textareaRef, text);
+  useEffect(() => {
+    const mirror = mirrorRef.current;
+    const layer = sentenceLayerRef.current;
+    if (!mirror || !layer) return;
+    const draw = () => {
+      const selected = mirror.querySelector('.sentence-highlight');
+      const bounds = mirror.getBoundingClientRect();
+      const boxes = selected ? mergeLineRects([...selected.getClientRects()]) : [];
+      layer.replaceChildren(...boxes.map((box) => {
+        const highlight = document.createElement('span');
+        highlight.className = 'editing-sentence-box';
+        highlight.style.left = `${box.left - bounds.left - 2}px`;
+        highlight.style.top = `${box.top - bounds.top}px`;
+        highlight.style.width = `${box.right - box.left + 4}px`;
+        highlight.style.height = `${box.bottom - box.top}px`;
+        return highlight;
+      }));
+    };
+    draw();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(draw);
+    observer?.observe(mirror);
+    window.addEventListener('resize', draw);
+    document.fonts?.addEventListener('loadingdone', draw);
+    return () => { observer?.disconnect(); window.removeEventListener('resize', draw); document.fonts?.removeEventListener('loadingdone', draw); };
+  }, [text, sentences, selectedIndex]);
   const selectAtCaret = (element) => {
     const position = element.selectionStart;
     const current = splitSentences(element.value);
@@ -2018,9 +2045,10 @@ function HighlightedPersianEditor({ text, sentences, selectedIndex, onChange, on
 
   return (
     <div className="highlight-editor" dir="rtl" lang="fa">
-      <div className="highlight-editor-mirror" dir="rtl" lang="fa" aria-hidden="true">
+      <div ref={mirrorRef} className="highlight-editor-mirror" dir="rtl" lang="fa" aria-hidden="true">
         {sentences.length ? <>{sentences.map((sentence, index) => <span key={sentence.start} className={selectedIndex === index ? 'sentence-highlight' : ''}>{sentence.text}</span>)}{text.slice(sentences[sentences.length - 1].end)}</> : text}
       </div>
+      <div ref={sentenceLayerRef} className="editing-sentence-layer" aria-hidden="true" />
       <textarea ref={textareaRef} dir="rtl" lang="fa" value={text} rows={1}
         aria-label="Edit Persian translation" placeholder="Enter or edit the Persian translation..."
         onChange={(event) => { onChange(event); selectAtCaret(event.currentTarget); }}
@@ -2346,7 +2374,7 @@ const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
             </div>
           </div>
 
-          <div ref={enTextRef} onMouseUp={() => captureSelection('en')} onKeyUp={() => captureSelection('en')}>
+          <div ref={enTextRef} className="marked-text-root" onMouseUp={() => captureSelection('en')} onKeyUp={() => captureSelection('en')}>
           {isEditingSource ? (
             <AutoResizeTextarea
               dir="ltr"
@@ -2354,12 +2382,10 @@ const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
               onChange={(e) => updateEnglishText(segment.id, e.target.value)}
               onBlur={() => setIsEditingSource(false)}
               autoFocus
-              className="w-full bg-[#161a22] border border-[#4b83b8]/60 rounded px-2 py-1.5 text-[13.5px] leading-[1.95] text-[#d5dce6] focus:outline-none resize-none text-justify"
+              className="persian-editor-plain w-full bg-transparent text-[13.5px] leading-[1.95] text-[#d5dce6] focus:outline-none resize-none text-justify"
             />
           ) : (
             <p
-              onDoubleClick={() => setIsEditingSource(true)}
-              title="Double-click to edit English text"
               className="px-2 py-1.5 text-[13.5px] leading-[1.95] text-[#d5dce6] font-normal select-text text-justify"
             >
               {sentenceHighlightEnabled && enSentences.length ? enSentences.map((sentence, index) => (
@@ -2424,7 +2450,7 @@ const BilingualSegmentRow = React.forwardRef(function BilingualSegmentRow(
             </div>
           </div>
 
-          <div ref={faTextRef} onMouseUp={() => captureSelection('fa')} onKeyUp={() => captureSelection('fa')}>
+          <div ref={faTextRef} className="marked-text-root" onMouseUp={() => captureSelection('fa')} onKeyUp={() => captureSelection('fa')}>
           {showDiffInline ? (
             <div
               dir="rtl"

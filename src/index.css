@@ -50,6 +50,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .highlight-editor-input { position: relative; display: block; resize: none; overflow: hidden; background: transparent; color: transparent; caret-color: #d5dce6; outline: none; border-radius: 6px; }
 .highlight-editor-input::selection { background: rgba(26, 145, 205, .65); color: transparent; }
 .highlight-editor:focus-within .highlight-editor-mirror { visibility: hidden; }
+.editing-sentence-layer { display: none; position: absolute; inset: 0; pointer-events: none; }
+.highlight-editor:focus-within .editing-sentence-layer { display: block; }
+.editing-sentence-box { position: absolute; border-radius: 6px; background: rgba(88, 153, 214, .3); }
 .highlight-editor-input:focus { color: #d5dce6; }
 .highlight-editor-input:focus::selection { color: #fff; }
 .highlight-editor-input::placeholder { color: #8b95a5; }
@@ -76,7 +79,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .dictionary-suggestion:hover { background: #26303d; }
 
 
-::highlight(saved-text-marks) { background-color: #edd413; color: #1b2028; }
+::highlight(saved-text-marks) { background-color: transparent; color: #1b2028; }
+.marked-text-root { position: relative; isolation: isolate; }
+.saved-mark-layer { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+.saved-mark-box { position: absolute; border-radius: 6px; background: #edd413; }
+.marked-text-root:has(.highlight-editor-input:focus) .saved-mark-layer { visibility: hidden; }
 
 
 .approval-progress { position: relative; min-width: 98px; overflow: hidden; border: 1px solid #3b485a; border-radius: 5px; background: #222832; text-align: center; }

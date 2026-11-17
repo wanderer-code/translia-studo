@@ -8,6 +8,20 @@ function refreshMarks() {
   else globalThis.CSS.highlights.delete('saved-text-marks');
 }
 
+export function mergeLineRects(rects) {
+  const sorted = rects.filter((rect) => rect.width > 0 && rect.height > 0)
+    .map(({ left, right, top, bottom }) => ({ left, right, top, bottom }))
+    .sort((a, b) => a.top - b.top || a.left - b.left);
+  const merged = [];
+  for (const rect of sorted) {
+    const previous = merged[merged.length - 1];
+    if (previous && Math.abs(previous.top - rect.top) < 2 && Math.abs(previous.bottom - rect.bottom) < 2 && rect.left <= previous.right + 4) {
+      previous.right = Math.max(previous.right, rect.right);
+    } else merged.push(rect);
+  }
+  return merged;
+}
+
 export function updateMarksForEdit(marks = [], before, after) {
   if (before === after) return marks;
   let prefix = 0;
@@ -44,7 +58,36 @@ export function useTextMarks(rootRef, text, marks, dependencies = []) {
       range.setStart(first.node, mark.start - first.start); range.setEnd(last.node, mark.end - last.start); ranges.push(range);
     }
     activeRanges.set(key.current, ranges); refreshMarks();
-    return () => { activeRanges.delete(key.current); refreshMarks(); };
+    const container = rootRef.current;
+    const layer = document.createElement('div');
+    layer.className = 'saved-mark-layer';
+    layer.setAttribute('aria-hidden', 'true');
+    container.appendChild(layer);
+    const draw = () => {
+      const bounds = container.getBoundingClientRect();
+      const boxes = ranges.flatMap((range) => mergeLineRects([...range.getClientRects()]));
+      layer.replaceChildren(...boxes.map((box) => {
+        const mark = document.createElement('span');
+        mark.className = 'saved-mark-box';
+        mark.style.left = `${box.left - bounds.left - 2}px`;
+        mark.style.top = `${box.top - bounds.top}px`;
+        mark.style.width = `${box.right - box.left + 4}px`;
+        mark.style.height = `${box.bottom - box.top}px`;
+        return mark;
+      }));
+    };
+    draw();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(draw);
+    observer?.observe(container);
+    window.addEventListener('resize', draw);
+    document.fonts?.addEventListener('loadingdone', draw);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', draw);
+      document.fonts?.removeEventListener('loadingdone', draw);
+      layer.remove();
+      activeRanges.delete(key.current); refreshMarks();
+    };
   }, [rootRef, text, marks, ...dependencies]);
 }
 
