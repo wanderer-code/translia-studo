@@ -2007,7 +2007,6 @@ function AutoResizeTextarea({ value, onChange, onKeyDown, onFocus, onBlur, dir =
 
 function HighlightedPersianEditor({ text, sentences, selectedIndex, onChange, onSentenceSelect, onKeyDown }) {
   const textareaRef = useRef(null);
-  const mirrorRef = useRef(null);
   useAutoResizeTextarea(textareaRef, text);
   const selectAtCaret = (element) => {
     const position = element.selectionStart;
@@ -2019,8 +2018,8 @@ function HighlightedPersianEditor({ text, sentences, selectedIndex, onChange, on
 
   return (
     <div className="highlight-editor" dir="rtl" lang="fa">
-      <div ref={mirrorRef} className="highlight-editor-mirror" aria-hidden="true">
-        {sentences.length ? sentences.map((sentence, index) => <span key={sentence.start} className={selectedIndex === index ? 'sentence-highlight' : ''}>{sentence.text}</span>) : text}
+      <div className="highlight-editor-mirror" dir="rtl" lang="fa" aria-hidden="true">
+        {sentences.length ? <>{sentences.map((sentence, index) => <span key={sentence.start} className={selectedIndex === index ? 'sentence-highlight' : ''}>{sentence.text}</span>)}{text.slice(sentences[sentences.length - 1].end)}</> : text}
       </div>
       <textarea ref={textareaRef} dir="rtl" lang="fa" value={text} rows={1}
         aria-label="Edit Persian translation" placeholder="Enter or edit the Persian translation..."

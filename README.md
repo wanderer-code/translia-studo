@@ -27,6 +27,7 @@ The parsers are in `src/parsers.js`, saved lessons in `src/lesson-data.js`, and 
 ## Reviewing
 
 - Use **+ Project** to create a separate workspace. Lesson and project changes are saved in this browser. **Backup** downloads all projects as JSON; **Restore** imports that backup.
+- Edits are saved automatically in the current browser's local storage. Updating the site at the same address normally keeps that data. Before changing the site's address, browser, or device, or clearing browser data, download a **Backup** and use **Restore** at the new location; local storage does not follow the app between addresses. Backups are downloaded manually and restoring one replaces the projects currently saved at that address.
 - Set each segment to Unreviewed, In progress, Needs attention, or Approved. The progress indicator counts approved segments.
 - Select text in an English or Persian block, then click the highlighter icon in that block's toolbar. Use the eraser icon to remove that block's text highlights. Highlights are saved with the project; editing inside a marked passage removes that mark.
 - Enable **Sentence highlight** and place the caret in a Persian sentence to highlight the English sentence at the corresponding position. You can edit the Persian text while highlighting is enabled. Matching is based on sentence order and can be wrong when a translation combines or rearranges sentences.

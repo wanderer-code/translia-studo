@@ -44,11 +44,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .review-navigation { flex-wrap: wrap; }
 }
 
-.highlight-editor { position: relative; width: 100%; font-family: 'Vazirmatn', 'Tahoma', sans-serif; font-size: 13.5px; line-height: 1.95; text-align: justify; }
-.highlight-editor-mirror, .highlight-editor-input { box-sizing: border-box; width: 100%; margin: 0; padding: 0; border: 0; font: inherit; line-height: inherit; text-align: inherit; white-space: pre-wrap; overflow-wrap: break-word; }
+.highlight-editor { position: relative; width: 100%; font-family: 'Vazirmatn', 'Tahoma', sans-serif; font-size: 13.5px; line-height: 1.95; text-align: justify; direction: rtl; }
+.highlight-editor-mirror, .highlight-editor-input { box-sizing: border-box; width: 100%; margin: 0; padding: 0; border: 0; font: inherit; line-height: inherit; letter-spacing: normal; text-align: justify; direction: rtl; white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; }
 .highlight-editor-mirror { position: absolute; inset: 0; color: #d5dce6; pointer-events: none; overflow: hidden; }
 .highlight-editor-input { position: relative; display: block; resize: none; overflow: hidden; background: transparent; color: transparent; caret-color: #d5dce6; outline: none; border-radius: 6px; }
 .highlight-editor-input::selection { background: rgba(26, 145, 205, .65); color: transparent; }
+.highlight-editor:focus-within .highlight-editor-mirror { visibility: hidden; }
+.highlight-editor-input:focus { color: #d5dce6; }
+.highlight-editor-input:focus::selection { color: #fff; }
 .highlight-editor-input::placeholder { color: #8b95a5; }
 
 .dictionary-panel { width: 340px; min-width: 280px; display: flex; flex-direction: column; background: #161a22; border-left: 1px solid #2c3340; color: #d5dce6; flex-shrink: 0; }
